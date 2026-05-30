@@ -1,6 +1,6 @@
 # Hedge Decision Agent
 
-[![tests](https://github.com/VincentLanzinger/hedge-decision-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/VincentLanzinger/hedge-decision-agent/actions/workflows/tests.yml)
+[![tests](https://github.com/SwapnilKhandoker101/TeamAlpha-ZeroOne/actions/workflows/tests.yml/badge.svg?branch=VTest)](https://github.com/SwapnilKhandoker101/TeamAlpha-ZeroOne/actions/workflows/tests.yml)
 [![python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -16,8 +16,8 @@ never makes a different recommendation than the engine.
 ## Clone and run
 
 ```bash
-git clone https://github.com/VincentLanzinger/hedge-decision-agent
-cd hedge-decision-agent
+git clone --branch VTest https://github.com/SwapnilKhandoker101/TeamAlpha-ZeroOne
+cd TeamAlpha-ZeroOne
 python -m venv .venv
 . .venv/bin/activate          # Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
