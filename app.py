@@ -492,12 +492,28 @@ with w2:
     kept = [c for c in bundle.curated if c.decision != curation.DROPPED][:3]
     if kept:
         for c in kept:
-            st.markdown(f"- {driver_phrase(c.driver.direction_overall, c.driver.name)}")
+            line = f"- {driver_phrase(c.driver.direction_overall, c.driver.name)}"
+            if c.amplified:
+                # Show the strongest matched token and its rationale.
+                key_token = max(
+                    c.matched_tokens,
+                    key=lambda t: curation.AMPLIFY_TOKENS_TTF.get(t, 1.0),
+                )
+                rationale = curation.AMPLIFY_RATIONALE.get(key_token, "high-value signal")
+                line += (
+                    f"  &nbsp;·&nbsp; <span style='color:#1f9d55; font-weight:600'>"
+                    f"boosted ×{c.amplification_factor:.2f}</span> "
+                    f"<span class='muted'>(matched “{key_token}” — {rationale})</span>"
+                )
+            st.markdown(line, unsafe_allow_html=True)
     n_dropped = sum(1 for c in bundle.curated if c.decision == curation.DROPPED)
+    n_amp = sum(1 for c in bundle.curated
+                 if c.amplified and c.decision != curation.DROPPED)
     st.markdown(
-        f"<div class='muted'>(We dropped {n_dropped} weak signals that scored "
-        f"high by coincidence — e.g. country-level population data unrelated "
-        f"to gas prices.)</div>",
+        f"<div class='muted'>We dropped {n_dropped} weak signals that scored "
+        f"high by coincidence (e.g. country-level population data unrelated "
+        f"to gas prices) and amplified {n_amp} high-conviction signals — see "
+        f"<em>How we weight each signal</em> below.</div>",
         unsafe_allow_html=True,
     )
 
@@ -526,6 +542,91 @@ if bundle.trust is not None:
     )
 else:
     st.markdown("No historical accuracy data on file.")
+
+st.divider()
+
+# ============================== HOW WE WEIGHT EACH SIGNAL ===================
+
+with st.expander(
+    "🔍 How we weight each signal  ·  full transparency",
+    expanded=False,
+):
+    n_kept = sum(1 for c in bundle.curated if c.decision == curation.KEPT)
+    n_dem = sum(1 for c in bundle.curated if c.decision == curation.DEMOTED)
+    n_drp = sum(1 for c in bundle.curated if c.decision == curation.DROPPED)
+    amp_kept = [c for c in bundle.curated
+                if c.amplified and c.decision != curation.DROPPED]
+
+    st.markdown(
+        f"""
+The Sybilion API returns **{len(bundle.curated)} raw driver candidates**. We pass
+them through a 3-stage curation pipeline before they influence the recommendation:
+
+1. **Whitelist filter** — keep only economically credible categories
+   (Energy, Commodities, Exchange Rates, Global risk, Equities, Market Indices,
+   Industry). Everything else is dropped.
+2. **Country plausibility** — within whitelisted categories, demote drivers
+   whose country scope doesn't make sense for European gas
+   (e.g. *Market Indices - Slovenia*).
+3. **High-conviction boost** — scan driver names for high-value tokens
+   (Brent, LNG, Carbon, VIX, geopolitical risk, EUR-USD, PMI, storage, …) and
+   multiply the signal weight by the strongest matching token's factor.
+
+**Result:** {n_kept} kept at full weight · {n_dem} demoted (×0.30) ·
+{n_drp} dropped · **{len(amp_kept)} amplified by keyword match (×1.10..×1.50)**.
+"""
+    )
+
+    if amp_kept:
+        st.markdown("##### Drivers that received an amplification boost")
+        amp_rows: list[dict[str, str]] = []
+        for c in sorted(amp_kept, key=lambda x: -x.amplification_factor)[:25]:
+            key_token = max(
+                c.matched_tokens,
+                key=lambda t: curation.AMPLIFY_TOKENS_TTF.get(t, 1.0),
+            )
+            rationale = curation.AMPLIFY_RATIONALE.get(key_token, "high-value signal")
+            tier = (
+                "1 (direct gas)" if c.amplification_factor >= 1.45 else
+                "2 (risk)" if c.amplification_factor >= 1.35 else
+                "3 (macro)" if c.amplification_factor >= 1.20 else
+                "4 (broad)"
+            )
+            amp_rows.append({
+                "driver": c.driver.name,
+                "boost": f"×{c.amplification_factor:.2f}",
+                "tier": tier,
+                "matched token": f"“{key_token}”",
+                "why this boost": rationale,
+            })
+        st.dataframe(pd.DataFrame(amp_rows), use_container_width=True, hide_index=True)
+        st.caption(
+            "**Strongest-match wins** — when a driver name contains multiple "
+            "tokens, only the highest-factor one applies (we never compound, to "
+            "stop weak tokens stacking into dominance). The full token table "
+            "is `AMPLIFY_TOKENS_TTF` / `AMPLIFY_RATIONALE` in "
+            "`src/curation.py` — easy to inspect or change without retraining."
+        )
+    else:
+        st.info("No drivers matched an amplification token on this forecast.")
+
+    st.markdown("##### Top signals dropped by the whitelist")
+    dropped = sorted(
+        [c for c in bundle.curated if c.decision == curation.DROPPED],
+        key=lambda c: c.driver.importance_overall, reverse=True,
+    )[:5]
+    if dropped:
+        drop_rows = [{
+            "raw importance": f"{c.driver.importance_overall:.1f}",
+            "driver": c.driver.name,
+            "why dropped": f"category '{c.driver.category}' isn't economically tied to gas",
+        } for c in dropped]
+        st.dataframe(pd.DataFrame(drop_rows), use_container_width=True, hide_index=True)
+        st.caption(
+            "These would otherwise sit near the top of the raw ranking. "
+            "The whitelist is the first line of defence against spurious "
+            "correlation (population trends, unrelated regional indicators, etc.)."
+        )
 
 st.divider()
 

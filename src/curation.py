@@ -102,6 +102,29 @@ AMPLIFY_TOKENS_TTF: dict[str, float] = {
 }
 
 
+# Human-readable economic rationale for each amplification token.
+# Surfaced in the cockpit so a user understands WHY a signal got boosted.
+AMPLIFY_RATIONALE: dict[str, str] = {
+    "brent":         "Oil benchmark — gas-oil price coupling via substitution",
+    "lng":           "Liquefied natural gas import flows shape European supply",
+    "carbon":        "EU ETS allowance price tracks gas-vs-coal competitiveness",
+    "natural gas":   "Direct gas-market signal",
+    "vix":           "Volatility regime spikes drive risk-off / energy premium",
+    "volatility":    "Volatility regime shifts move energy prices",
+    "geopolitical":  "Direct geopolitical risk premium on European supply",
+    "global risk":   "Geopolitical / macro risk composite",
+    "exchange rate": "EUR weakness raises EUR-denominated gas cost",
+    "eur/usd":       "EUR-USD cross is the gas-price currency channel",
+    "usd/eur":       "EUR-USD cross is the gas-price currency channel",
+    "pmi":           "Manufacturing PMI proxies industrial gas demand",
+    "inflation":     "Inflation regimes drive cost-of-carry expectations",
+    "heating":       "Heating demand drives seasonal gas draw",
+    "storage":       "European gas storage is a leading supply indicator",
+    "energy":        "Broad-category energy market signal",
+    "commodities":   "Broad-category commodity market signal",
+}
+
+
 def amplification_factor(
     driver_name: str,
     table: dict[str, float] = AMPLIFY_TOKENS_TTF,
