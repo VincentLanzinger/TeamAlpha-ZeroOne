@@ -1,0 +1,22 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "hedge-cockpit",
+      "runtimeExecutable": ".venv\\Scripts\\streamlit.exe",
+      "runtimeArgs": [
+        "run",
+        "app.py",
+        "--server.headless",
+        "true",
+        "--server.port",
+        "8501",
+        "--server.runOnSave",
+        "false",
+        "--browser.gatherUsageStats",
+        "false"
+      ],
+      "port": 8501
+    }
+  ]
+}

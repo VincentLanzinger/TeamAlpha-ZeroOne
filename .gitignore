@@ -19,6 +19,8 @@ cache/*
 !cache/.gitkeep
 .streamlit/
 *.log
+response.html
+.git/COMMIT_MSG.txt
 
 # IDE
 .vscode/
