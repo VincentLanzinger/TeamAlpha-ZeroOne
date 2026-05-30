@@ -17,7 +17,8 @@ env/
 # Cache / build — keep dir, ignore contents (.gitkeep keeps the folder tracked)
 cache/*
 !cache/.gitkeep
-.streamlit/
+# Streamlit: track config.toml (theme/server defaults), never track secrets.toml
+.streamlit/secrets.toml
 *.log
 response.html
 .git/COMMIT_MSG.txt

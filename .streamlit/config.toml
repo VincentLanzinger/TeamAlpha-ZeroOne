@@ -1,0 +1,18 @@
+# Streamlit runtime config — production-friendly defaults.
+# Used by both the local `streamlit run app.py` and Streamlit Community Cloud.
+
+[server]
+headless = true
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+# Subtle dark theme tuned for the hedge cockpit
+base = "dark"
+primaryColor = "#1f9d55"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#1a1f2e"
+textColor = "#e6e9ef"
+font = "sans serif"
