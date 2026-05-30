@@ -1,5 +1,9 @@
 # Hedge Decision Agent
 
+[![tests](https://github.com/lanzinger-vincent/hedge-decision-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/lanzinger-vincent/hedge-decision-agent/actions/workflows/tests.yml)
+[![python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 **Zero One Hack — Forecasting track.**
 A decision agent for procurement teams that have to decide *what share of next quarter's
 input commodity to lock in now vs. wait for*. Built on the Sybilion Forecasting API.
@@ -8,6 +12,23 @@ The intelligence is in the **decision engine**, the **driver-curation layer**, t
 **backtest-aware trust grounding**, and the **adaptive shock loop** — not in an LLM.
 An LLM (Featherless) is present, but only to verbalize already-computed numbers; it
 never makes a different recommendation than the engine.
+
+## Clone and run
+
+```bash
+git clone https://github.com/lanzinger-vincent/hedge-decision-agent
+cd hedge-decision-agent
+python -m venv .venv
+. .venv/bin/activate          # Windows: .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+cp .env.example .env          # then paste real keys (optional — works without them)
+pytest tests/                 # 79 passed in ~3s
+streamlit run app.py          # → http://localhost:8501
+```
+
+Works **without API keys** off the committed cache. Add `SYBILION_API_TOKEN` to call
+new forecasts; add `FEATHERLESS_API_KEY` for live LLM narration (template fallback is
+deterministic and instant otherwise).
 
 ---
 
