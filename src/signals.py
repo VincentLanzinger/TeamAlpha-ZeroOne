@@ -57,11 +57,18 @@ HORIZONS: tuple[int, ...] = tuple(range(1, 7))
 
 @dataclass(frozen=True)
 class HorizonBand:
+    """One horizon month's forecast.
+
+    `quantiles` carries all 19 levels (0.05..0.95 step 0.05) when available
+    so cost-of-waiting can build a real regret distribution over them.
+    `q10`/`q50`/`q90` are the convenience shortcuts for the most-used levels.
+    """
     date: str
     q10: float
     q50: float
     q90: float
     point: float
+    quantiles: dict[float, float] = field(default_factory=dict)
 
     @property
     def width(self) -> float:
@@ -70,6 +77,19 @@ class HorizonBand:
     @property
     def width_pct(self) -> float:
         return (self.q90 - self.q10) / self.q50 if self.q50 else float("nan")
+
+
+def _parse_quantile_dict(q: dict[str, Any] | None) -> dict[float, float]:
+    """Convert {'0.05': v, '0.1': v, ...} -> {0.05: v, 0.1: v, ...}."""
+    if not isinstance(q, dict):
+        return {}
+    out: dict[float, float] = {}
+    for k, v in q.items():
+        try:
+            out[float(k)] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def parse_forecast_bands(forecast_json: dict[str, Any]) -> list[HorizonBand]:
@@ -81,14 +101,16 @@ def parse_forecast_bands(forecast_json: dict[str, Any]) -> list[HorizonBand]:
     rows: list[HorizonBand] = []
     for date, row in sorted(series.items()):
         q = row.get("quantile_forecast", {})
+        quantiles = _parse_quantile_dict(q)
         point = row.get("forecast")
         rows.append(
             HorizonBand(
                 date=date,
-                q10=float(q.get("0.1") or q.get("0.10") or float("nan")),
-                q50=float(q.get("0.5") or q.get("0.50") or float("nan")),
-                q90=float(q.get("0.9") or q.get("0.90") or float("nan")),
+                q10=float(quantiles.get(0.1, float("nan"))),
+                q50=float(quantiles.get(0.5, float("nan"))),
+                q90=float(quantiles.get(0.9, float("nan"))),
                 point=float(point) if point is not None else float("nan"),
+                quantiles=quantiles,
             )
         )
     return rows
