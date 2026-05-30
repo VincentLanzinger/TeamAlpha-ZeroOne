@@ -70,7 +70,8 @@ class Narration:
 
 FEATHERLESS_DEFAULT_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 FEATHERLESS_URL = "https://api.featherless.ai/v1/chat/completions"
-DEFAULT_TIMEOUT_S = 30.0
+FEATHERLESS_UA = "hedge-decision-agent/0.1 (+python-urllib)"  # Cloudflare blocks default Python-urllib UA
+DEFAULT_TIMEOUT_S = 60.0
 DEFAULT_TEMPERATURE = 0.3
 
 
@@ -275,7 +276,9 @@ def _call_featherless(
         data=body,
         headers={
             "Content-Type": "application/json",
+            "Accept": "application/json",
             "Authorization": f"Bearer {api_key}",
+            "User-Agent": FEATHERLESS_UA,
         },
         method="POST",
     )
