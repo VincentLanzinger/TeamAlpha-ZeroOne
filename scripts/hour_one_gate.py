@@ -54,67 +54,121 @@ def parse_forecast_bands(forecast_json: dict[str, Any]) -> list[dict[str, float]
     return rows
 
 
-def _imp(d: dict[str, Any]) -> float:
-    """Importance with three nesting fallbacks: overall.mean → mean → flat."""
-    imp = d.get("importance")
-    if isinstance(imp, dict):
-        ov = imp.get("overall")
-        if isinstance(ov, dict) and "mean" in ov:
-            return float(ov["mean"])
-        if "mean" in imp:
-            return float(imp["mean"])
-        return 0.0
-    return float(imp or 0.0)
+HORIZON_KEYS = ("horizon_1", "horizon_2", "horizon_3", "horizon_4", "horizon_5", "horizon_6")
 
 
-def _dir(d: dict[str, Any]) -> str:
-    direction = d.get("direction")
-    if isinstance(direction, dict):
-        return str(direction.get("overall") or direction.get("mean") or "?")
-    if direction is None:
-        return "?"
-    return str(direction)
+def _sum_inner(d: Any) -> float:
+    """An importance/direction horizon entry is {<lag-key str>: float, ...}.
+    Aggregate by SUM across lag keys (captures the total contribution of the
+    driver at that horizon, regardless of how it splits across lags)."""
+    if isinstance(d, dict):
+        return float(sum(float(v) for v in d.values()))
+    return float(d) if d is not None else 0.0
 
 
-def _corr(d: dict[str, Any]) -> float | None:
-    corr = d.get("correlation")
+def _imp(driver: dict[str, Any]) -> float:
+    """Driver-level importance = MEAN over horizons of (SUM over inner lag keys).
+
+    The API artifact has no `importance.overall.mean`; we compute it.
+    """
+    imp = driver.get("importance") or {}
+    if not isinstance(imp, dict):
+        return float(imp or 0.0)
+    # Some drivers have `overall.mean` injected; prefer that when present.
+    overall = imp.get("overall")
+    if isinstance(overall, dict) and "mean" in overall:
+        return float(overall["mean"])
+    per_h = [_sum_inner(imp.get(h)) for h in HORIZON_KEYS if h in imp]
+    return float(sum(per_h) / len(per_h)) if per_h else 0.0
+
+
+def _dir(driver: dict[str, Any]) -> float:
+    """Driver-level direction = signed mean (positive = up, negative = down).
+
+    Prefer `direction.overall.mean`; otherwise mean over horizons of summed
+    inner values.
+    """
+    direction = driver.get("direction") or {}
+    if not isinstance(direction, dict):
+        try:
+            return float(direction)
+        except (TypeError, ValueError):
+            return 0.0
+    overall = direction.get("overall")
+    if isinstance(overall, dict) and "mean" in overall:
+        return float(overall["mean"])
+    # horizon_0 captures the "now" direction for some drivers.
+    if "horizon_0" in direction:
+        return float(_sum_inner(direction["horizon_0"]))
+    per_h = [_sum_inner(direction.get(h)) for h in HORIZON_KEYS if h in direction]
+    return float(sum(per_h) / len(per_h)) if per_h else 0.0
+
+
+def _corr(driver: dict[str, Any]) -> float | None:
+    corr = driver.get("pearson_correlation") or driver.get("correlation") or {}
     if isinstance(corr, dict):
         ov = corr.get("overall")
         if isinstance(ov, dict) and "mean" in ov:
             return float(ov["mean"])
-        return float(corr.get("mean")) if "mean" in corr else None
-    return float(corr) if corr is not None else None
+        if "mean" in corr:
+            return float(corr["mean"])
+        return None
+    try:
+        return float(corr)
+    except (TypeError, ValueError):
+        return None
 
 
-def _name(d: dict[str, Any]) -> str:
-    return str(d.get("driver_name") or d.get("name") or d.get("hash_id") or "?")
+def _name(driver: dict[str, Any]) -> str:
+    return str(driver.get("driver_name") or driver.get("name") or driver.get("hash_id") or "?")
 
 
-def _category(d: dict[str, Any]) -> str:
-    return str(d.get("category") or d.get("category_name") or "?")
+def _category(driver: dict[str, Any]) -> str:
+    """Drivers carry no explicit category; derive from the 'Cat - Scope' name prefix.
+
+    Examples: 'Commodities - World' -> 'Commodities'; 'Population - Nicaragua' -> 'Population'.
+    """
+    name = _name(driver)
+    if " - " in name:
+        return name.split(" - ", 1)[0].strip()
+    return name
 
 
 def parse_drivers(external_signals: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return a list of driver rows ranked by importance.overall.mean desc."""
-    raw = (
-        external_signals.get("data", {}).get("drivers")
-        or external_signals.get("drivers")
-        or external_signals.get("data", {}).get("external_signals")
-        or external_signals.get("external_signals")
-        or []
-    )
+    """Return a list of driver rows ranked by computed importance desc.
+
+    Accepts the actual artifact shape: `data` is a dict keyed by UUID, each value
+    is `{driver_name, importance: {horizon_1..6: {lag: value}}, direction: {...},
+    pearson_correlation: {...}}`. Falls back to legacy `drivers` list shape if seen.
+    """
+    raw = external_signals.get("data") or external_signals.get("drivers") or []
+    if isinstance(raw, dict):
+        items = list(raw.items())
+    elif isinstance(raw, list):
+        items = [(d.get("hash_id", ""), d) for d in raw]
+    else:
+        items = []
     rows = [
         {
+            "uuid": uid,
             "name": _name(d),
             "category": _category(d),
             "importance": _imp(d),
             "direction": _dir(d),
             "correlation": _corr(d),
         }
-        for d in raw
+        for uid, d in items
     ]
     rows.sort(key=lambda r: r["importance"], reverse=True)
     return rows
+
+
+def _dir_arrow(value: float) -> str:
+    if value > 0.01:
+        return "+"
+    if value < -0.01:
+        return "-"
+    return "0"
 
 
 # -- verdict ----------------------------------------------------------------
@@ -122,11 +176,16 @@ def parse_drivers(external_signals: dict[str, Any]) -> list[dict[str, Any]]:
 def verdict(
     drivers: list[dict[str, Any]],
     *,
-    importance_threshold: float = 0.05,
+    importance_threshold: float = 5.0,
     min_credible: int = 5,
-    min_top_importance: float = 0.10,
+    min_top_importance: float = 20.0,
 ) -> tuple[str, str]:
-    """Return ('KEEP'|'SWITCH', reason)."""
+    """Return ('KEEP'|'SWITCH', reason).
+
+    Importance scale (observed): per-driver values are 0 to ~70. Many drivers are
+    flat-zero (no contribution); credible TTF drivers like 'Commodities - World'
+    score in the 30–70 range. Thresholds calibrated to that scale.
+    """
     if not drivers:
         return "SWITCH", "No drivers returned at all."
     credible = [d for d in drivers if d["importance"] >= importance_threshold]
@@ -136,14 +195,14 @@ def verdict(
     if n_cred >= min_credible and top_imp >= min_top_importance:
         return (
             "KEEP",
-            f"{n_cred} drivers with importance >= {importance_threshold:.2f}, "
-            f"top = {top_imp:.3f}, spans {n_distinct_cats} category bucket(s).",
+            f"{n_cred} drivers with importance >= {importance_threshold:.1f}, "
+            f"top = {top_imp:.2f}, spans {n_distinct_cats} category bucket(s).",
         )
     return (
         "SWITCH",
-        f"Thin: only {n_cred} drivers with importance >= {importance_threshold:.2f} "
-        f"(need {min_credible}) and top importance = {top_imp:.3f} "
-        f"(need {min_top_importance:.2f}). Try changing TICKER in src/config.py.",
+        f"Thin: only {n_cred} drivers with importance >= {importance_threshold:.1f} "
+        f"(need {min_credible}) and top importance = {top_imp:.2f} "
+        f"(need {min_top_importance:.1f}). Try changing TICKER in src/config.py.",
     )
 
 
@@ -186,7 +245,7 @@ def run(force: bool = False, top_n: int = 15) -> int:
     key = sc.cache_key(body)
     cdir = sc.cache_dir_for(body)
     print(f"--- forecast request ---")
-    print(f"cache_key  = {key[:12]}…")
+    print(f"cache_key  = {key[:12]}...")
     print(f"cache_dir  = {cdir}")
     cached = cdir.exists() and (cdir / "forecast.json").exists()
     print(f"cache_hit  = {cached}{'  (no spend)' if cached else '  (will bill)'}")
@@ -222,13 +281,18 @@ def run(force: bool = False, top_n: int = 15) -> int:
 
     # --- drivers ----
     drivers = parse_drivers(signals)
-    print(f"--- top {min(top_n, len(drivers))} drivers (of {len(drivers)}) — ranked by importance.overall.mean ---")
-    print(f"{'#':>3}  {'imp':>7}  {'dir':>5}  {'corr':>7}  category  name")
+    n_nonzero = sum(1 for d in drivers if d["importance"] > 0)
+    print(
+        f"--- top {min(top_n, len(drivers))} of {len(drivers)} drivers "
+        f"({n_nonzero} with importance > 0) ---"
+    )
+    print(f"{'#':>3}  {'imp':>8}  {'dir':>4}  {'dir_val':>8}  {'corr':>7}  {'category':<18}  name")
     for i, d in enumerate(drivers[:top_n], start=1):
-        corr = f"{d['correlation']:+.2f}" if d["correlation"] is not None else "   ?  "
+        corr = f"{d['correlation']:+.3f}" if d["correlation"] is not None else "   ?   "
         print(
-            f"{i:>3}  {d['importance']:>7.3f}  {d['direction']:>5}  {corr:>7}  "
-            f"{d['category']:<14}  {d['name']}"
+            f"{i:>3}  {d['importance']:>8.3f}  "
+            f"{_dir_arrow(d['direction']):>4}  {d['direction']:>+8.3f}  {corr:>7}  "
+            f"{d['category']:<18}  {d['name']}"
         )
     print()
 
@@ -247,7 +311,7 @@ def run(force: bool = False, top_n: int = 15) -> int:
     if v == "SWITCH":
         alt = "ALUMINUM" if spec.symbol == "TTF" else "TTF"
         print(
-            f"\n→ Try flipping `TICKER = \"{alt}\"` in src/config.py (or refine "
+            f"\n-> Try flipping `TICKER = \"{alt}\"` in src/config.py (or refine "
             f"filters/keywords in TICKER_REGISTRY) and re-run.",
         )
     return 0 if v == "KEEP" else 1
