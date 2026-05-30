@@ -13,8 +13,14 @@ The intelligence is in the **decision engine**, the **driver-curation layer**, t
 An LLM (Featherless) is present, but only to verbalize already-computed numbers; it
 never makes a different recommendation than the engine.
 
-## Clone and run
+## Try it / clone and run
 
+**Hosted (Streamlit Community Cloud):**
+[Open the cockpit](https://share.streamlit.io/deploy?repository=SwapnilKhandoker101/TeamAlpha-ZeroOne&branch=VTest&mainModule=app.py)
+— first-time visitors will see the "Deploy" page; the team owner can complete the
+one-click deploy from there. Live result is published to a `*.streamlit.app` URL.
+
+**Locally:**
 ```bash
 git clone --branch VTest https://github.com/SwapnilKhandoker101/TeamAlpha-ZeroOne
 cd TeamAlpha-ZeroOne
