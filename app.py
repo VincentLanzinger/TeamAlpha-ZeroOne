@@ -22,7 +22,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
-from src import adaptive, config, curation, decision, narrator
+from src import (
+    adaptive, config, countries, curation, data, decision, narrator,
+)
+from src import sybilion_client as sc
 from src.signals import HorizonBand, parse_drivers
 from src.sybilion_client import has_token
 
@@ -49,27 +52,48 @@ TIER_COLOR = {
 # -- caching -----------------------------------------------------------------
 
 @st.cache_data(show_spinner=False)
-def _latest_cache_dir() -> str:
-    cands = [
-        d for d in (REPO / "cache").iterdir()
-        if d.is_dir() and (d / "forecast.json").exists()
-    ]
-    if not cands:
-        raise FileNotFoundError(
-            "No cached forecast under cache/. Run scripts/hour_one_gate.py first."
-        )
-    return str(max(cands, key=lambda d: d.stat().st_mtime))
+def _build_body_for_country(country_code: str) -> dict:
+    """Build the forecast request body for a given country code."""
+    country = countries.get_country(country_code)
+    spec = config.TICKER_REGISTRY["TTF"]   # underlying series is always TTF
+    df = data.load_series(REPO / spec.csv_path)
+    return sc.build_forecast_body(
+        timeseries=data.to_api_payload(df),
+        title=country.forecast_title,
+        description=country.forecast_description,
+        keywords=country.forecast_keywords,
+        soft_horizon=config.SOFT_HORIZON,
+        recency_factor=0.7,
+        backtest=True,
+        strictly_positive=True,
+        regions=[country.region_id],
+        categories=[25, 46],  # Energy + Commodities
+    )
+
+
+def _cache_dir_for_country(country_code: str) -> Path:
+    return REPO / "cache" / sc.cache_key(_build_body_for_country(country_code))
+
+
+def _cache_exists(country_code: str) -> bool:
+    cdir = _cache_dir_for_country(country_code)
+    return cdir.exists() and (cdir / "forecast.json").exists()
 
 
 @st.cache_data(show_spinner=False)
-def _load_bundle(cache_dir: str) -> narrator.DecisionBundle:
-    return narrator.build_bundle_from_cache(Path(cache_dir))
+def _load_bundle(country_code: str) -> narrator.DecisionBundle:
+    country = countries.get_country(country_code)
+    return narrator.build_bundle_from_cache(
+        _cache_dir_for_country(country_code),
+        country=country,
+    )
 
 
 @st.cache_data(show_spinner=False)
-def _load_cached_drivers(cache_dir: str):
+def _load_cached_drivers(country_code: str):
+    cdir = _cache_dir_for_country(country_code)
     return parse_drivers(json.loads(
-        (Path(cache_dir) / "external_signals.json").read_text(encoding="utf-8")
+        (cdir / "external_signals.json").read_text(encoding="utf-8")
     ))
 
 
@@ -237,26 +261,145 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-try:
-    cache_dir = _latest_cache_dir()
-except FileNotFoundError as e:
-    st.error(str(e))
-    st.stop()
+# ============================== COUNTRY PICKER ==============================
+# This is the FIRST control. No default — user must pick to see the cockpit.
 
-bundle = _load_bundle(cache_dir)
-cached_drivers = _load_cached_drivers(cache_dir)
-
-# ============================== SIDEBAR =====================================
+_COUNTRY_KEYS = list(countries.COUNTRIES.keys())
 
 with st.sidebar:
-    st.title("Controls")
-    st.caption(
-        f"Asset: **{bundle.display_name}**  \n"
-        f"Source: cached forecast `{Path(cache_dir).name[:8]}…`"
+    st.title("Hedge Decision Agent")
+    st.markdown("**Step 1 — pick your country**")
+    selected_code = st.selectbox(
+        "Procurement country",
+        options=[None] + _COUNTRY_KEYS,
+        format_func=lambda c: (
+            "— pick a country to start —" if c is None else
+            f"{countries.COUNTRIES[c].flag}  {countries.COUNTRIES[c].name}"
+            + ("  · cached" if countries.COUNTRIES[c].cached_in_repo else "")
+        ),
+        index=0,
+        label_visibility="collapsed",
+        help=(
+            "Each country has its own gas-market priorities — heating demand, "
+            "LNG terminals, pipeline supply. The system tailors the driver "
+            "weighting and submits a country-scoped forecast."
+        ),
     )
+    if selected_code is not None:
+        _country = countries.COUNTRIES[selected_code]
+        st.markdown(
+            f"<div class='muted'>{_country.flag} <strong>{_country.name}</strong>"
+            f" — {_country.one_liner}</div>",
+            unsafe_allow_html=True,
+        )
     st.caption(
         f"Sybilion: {'connected' if has_token() else '**missing token**'}  \n"
         f"LLM narrator: {'Featherless' if narrator.has_llm() else 'template fallback'}"
+    )
+    st.divider()
+
+# -- LANDING (no country chosen) --------------------------------------------
+if selected_code is None:
+    st.title("Hedge Decision Agent")
+    st.markdown(
+        "A decision agent for European industrial gas procurement. "
+        "**Pick your country in the sidebar to start** — each country gets "
+        "a tailored set of driver weights, then we submit (or load a cached) "
+        "Sybilion forecast scoped to that country's region."
+    )
+    st.divider()
+    st.markdown("### Countries available")
+    cols = st.columns(3)
+    for i, (code, c) in enumerate(countries.COUNTRIES.items()):
+        with cols[i % 3]:
+            tag = "🟢 cached" if c.cached_in_repo else "submit needed (~€1.30)"
+            st.markdown(
+                f"<div class='hedge-card'>"
+                f"<div style='font-size:18px'>{c.flag} <strong>{c.name}</strong></div>"
+                f"<div class='muted' style='margin-top:6px'>{c.one_liner}</div>"
+                f"<div class='muted' style='margin-top:8px'><em>{tag}</em></div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+    st.divider()
+    st.caption(
+        "The underlying price series is Dutch TTF — the European gas benchmark "
+        "every EU procurement team aligns to. What changes per country is the "
+        "Sybilion region filter, the driver-keyword weighting, and the "
+        "metadata sent with the forecast request."
+    )
+    st.stop()
+
+country = countries.get_country(selected_code)
+
+# -- SUBMIT GATE (country chosen, no cache yet) -----------------------------
+if not _cache_exists(selected_code):
+    st.title(f"{country.flag} {country.name} — preparing forecast")
+    st.markdown(country.rationale)
+    st.divider()
+    st.markdown("### Weighting setup for this country")
+    st.caption(
+        "These are the high-conviction tokens we'll boost when curating the "
+        f"driver list for {country.name}. Strongest match wins per driver — "
+        "we never compound multiple matches."
+    )
+    amp_rows = []
+    for token, factor in sorted(country.amplify_tokens.items(), key=lambda x: -x[1]):
+        amp_rows.append({
+            "token": f"“{token}”",
+            "factor": f"×{factor:.2f}",
+            "rationale": curation.AMPLIFY_RATIONALE.get(
+                token,
+                "Country-specific signal (see countries.py)",
+            ),
+        })
+    st.dataframe(pd.DataFrame(amp_rows), use_container_width=True, hide_index=True)
+
+    st.divider()
+    if not has_token():
+        st.error(
+            "🔒 No `SYBILION_API_TOKEN` in env, so we can't submit a fresh "
+            "forecast. Either set the token and reload, or pick a country "
+            "marked **cached** (loads instantly off the committed cache)."
+        )
+        st.stop()
+
+    st.warning(
+        f"No cached forecast for {country.name} yet. Submitting will call "
+        f"the Sybilion `/forecasts` API (1–2 min wait, billed ~€1–€2 against "
+        f"the trial credit). After it completes, the cockpit loads "
+        f"automatically and the result is cached on disk."
+    )
+    if st.button(f"⚡ Submit forecast for {country.flag} {country.name}",
+                  type="primary"):
+        with st.spinner(f"Submitting forecast for {country.name}… (1–2 min)"):
+            try:
+                body = _build_body_for_country(selected_code)
+                sc.submit_and_wait_forecast(body)
+                # Bust caches so the next render finds the new cache dir.
+                _cache_exists.clear()
+                _load_bundle.clear()
+                _load_cached_drivers.clear()
+                st.success(
+                    f"Forecast for {country.name} cached. Reloading…"
+                )
+                st.rerun()
+            except Exception as e:
+                st.error(f"Submit failed: {type(e).__name__}: {e}")
+    st.stop()
+
+# -- Cockpit path — country picked AND forecast cached ----------------------
+bundle = _load_bundle(selected_code)
+cached_drivers = _load_cached_drivers(selected_code)
+cache_dir = str(_cache_dir_for_country(selected_code))
+
+# ============================== SIDEBAR (rest of controls) ==================
+
+with st.sidebar:
+    st.markdown(
+        f"<div class='muted'>Forecast cache "
+        f"<code>{Path(cache_dir).name[:8]}…</code></div>",
+        unsafe_allow_html=True,
     )
 
     st.divider()

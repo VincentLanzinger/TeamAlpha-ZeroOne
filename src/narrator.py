@@ -448,8 +448,19 @@ def narrate(
 
 # -- bundle builder ---------------------------------------------------------
 
-def build_bundle_from_cache(cache_dir: Any, *, adaptive: AdaptiveResult | None = None) -> DecisionBundle:
-    """Convenience: load a cached forecast + run decision/curation/economics."""
+def build_bundle_from_cache(
+    cache_dir: Any,
+    *,
+    adaptive: AdaptiveResult | None = None,
+    country: Any = None,
+) -> DecisionBundle:
+    """Convenience: load a cached forecast + run decision/curation/economics.
+
+    `country` is an optional `src.countries.CountrySpec`. When provided, its
+    `amplify_tokens` table replaces the default (TTF) amplification table, so
+    the same forecast can be curated through different country lenses without
+    re-submitting.
+    """
     from pathlib import Path
 
     from src import config, data
@@ -465,7 +476,11 @@ def build_bundle_from_cache(cache_dir: Any, *, adaptive: AdaptiveResult | None =
     bands = parse_forecast_bands(forecast)
     signals = json.loads((cdir / "external_signals.json").read_text(encoding="utf-8"))
     drivers = parse_drivers(signals)
-    curated = curation.curate(drivers)
+    amplify_table = (
+        country.amplify_tokens if country is not None and country.amplify_tokens
+        else None  # falls back to curation.AMPLIFY_TOKENS_TTF
+    )
+    curated = curation.curate(drivers, amplify_table=amplify_table)
 
     hedge_rows = decision.decide(bands, spot)
     summary = decision.summarise_next_quarter(hedge_rows, quarter_months=3)
@@ -477,9 +492,13 @@ def build_bundle_from_cache(cache_dir: Any, *, adaptive: AdaptiveResult | None =
     cost_rows = economics.cost_of_waiting(hedge_rows, bands)
     cost_summary = economics.quarter_summary(cost_rows, months=3)
 
+    display_name = (
+        f"{country.name} ({spec.display_name})" if country is not None
+        else spec.display_name
+    )
     return DecisionBundle(
         ticker=spec.symbol,
-        display_name=spec.display_name,
+        display_name=display_name,
         unit=spec.unit,
         spot=spot,
         bands=bands,
