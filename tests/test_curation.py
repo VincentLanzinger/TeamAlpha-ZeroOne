@@ -59,8 +59,10 @@ def test_curate_demotes_implausible_scope():
 
 
 def test_curate_keeps_world_scope():
+    # Intent: scope plausibility shouldn't demote a 'World' scope.
+    # Disable amplification so we test only the scope-plausibility step.
     world = _make_driver("Commodities - World", 80.0)
-    out = curation.curate([world])
+    out = curation.curate([world], amplify_table=None)
     c = out[0]
     assert c.decision == curation.KEPT
     assert c.adjusted_importance_overall == pytest.approx(80.0)
@@ -142,3 +144,98 @@ def test_curation_real_artifact_drops_all_population_drivers():
     # Energy - Belgium should remain in the top 5 after curation.
     top5 = [c.driver.name for c in kept[:5]]
     assert "Energy - Belgium" in top5
+
+
+# ---------- dynamic keyword amplification ---------------------------------
+
+def test_amplification_factor_no_match_returns_one():
+    f, m = curation.amplification_factor("Population - Nigeria")
+    assert f == 1.0
+    assert m == ()
+
+
+def test_amplification_factor_picks_strongest_match():
+    # "carbon" alone gives 1.45; "energy" alone gives 1.15.
+    # A name containing BOTH should return the stronger 1.45 (we never compound).
+    f, m = curation.amplification_factor("Energy - Carbon allowances")
+    assert f == pytest.approx(1.45)
+    assert set(m) == {"energy", "carbon"}
+
+
+def test_amplification_factor_case_insensitive():
+    f, _ = curation.amplification_factor("EUR/USD exchange rate index")
+    # "exchange rate" -> 1.30, "eur/usd" -> 1.30
+    assert f == pytest.approx(1.30)
+
+
+def test_curate_amplifies_matching_drivers():
+    # Name contains "energy" -> boost x1.15 over the 100.0 base.
+    d = _make_driver("Energy - Belgium", 100.0)
+    out = curation.curate([d])
+    c = out[0]
+    assert c.amplified
+    assert c.amplification_factor == pytest.approx(1.15)
+    assert "energy" in c.matched_tokens
+    assert c.adjusted_importance_overall == pytest.approx(100.0 * 1.15)
+
+
+def test_curate_amplification_disabled_via_table_none():
+    d = _make_driver("Energy - Belgium", 100.0)
+    out = curation.curate([d], amplify_table=None)
+    c = out[0]
+    assert not c.amplified
+    assert c.amplification_factor == 1.0
+    assert c.matched_tokens == ()
+    assert c.adjusted_importance_overall == pytest.approx(100.0)
+
+
+def test_amplification_compounds_with_scope_demotion():
+    # Implausible scope (Slovenia for TTF) -> demote x0.30
+    # But name contains "energy" -> amplify x1.15
+    # Combined: 0.30 * 1.15 = 0.345
+    d = _make_driver("Energy - Slovenia", 100.0)
+    out = curation.curate([d])
+    c = out[0]
+    assert c.decision == curation.DEMOTED
+    assert c.amplified  # the boost survives demotion
+    assert c.adjusted_importance_overall == pytest.approx(
+        100.0 * curation.DEMOTE_FACTOR_DEFAULT * 1.15
+    )
+
+
+@requires_cache
+def test_curation_real_artifact_amplifies_at_least_some_drivers():
+    """On the live TTF artifact, the amplification table should fire for at
+    least the Energy, Commodities, Exchange Rates, Global risk, and Equities
+    World-scoped drivers — those are the high-conviction kept signals."""
+    artifact = json.loads((TTF_CACHE / "external_signals.json").read_text(encoding="utf-8"))
+    drivers = parse_drivers(artifact)
+    decisions = curation.curate(drivers)
+    amplified = [c for c in decisions if c.amplified and c.decision != curation.DROPPED]
+    assert len(amplified) >= 3
+    # At least one Energy/Commodities/Exchange Rates driver gets amplified.
+    cats = {c.driver.category for c in amplified}
+    assert cats & {"Energy", "Commodities", "Exchange Rates", "Global risk"}
+
+
+@requires_cache
+def test_amplification_changes_top_ranking_vs_disabled():
+    """A/B: with amplification ON vs OFF, the top-3 ranking can differ."""
+    artifact = json.loads((TTF_CACHE / "external_signals.json").read_text(encoding="utf-8"))
+    drivers = parse_drivers(artifact)
+    with_amp = curation.curate(drivers)
+    without_amp = curation.curate(drivers, amplify_table=None)
+    # The sets are equal (we don't drop more), but order may differ.
+    assert {c.driver.uuid for c in with_amp} == {c.driver.uuid for c in without_amp}
+    # If amplification fires at all, at least one of the top 5 must shift.
+    top5_with = [c.driver.uuid for c in curation.kept_only(with_amp)[:5]]
+    top5_without = [c.driver.uuid for c in curation.kept_only(without_amp)[:5]]
+    # We don't require they differ (depends on real data), but if any kept
+    # driver was amplified, totals shifted somewhere — verify scores changed.
+    any_shifted = any(
+        a.adjusted_importance_overall != b.adjusted_importance_overall
+        for a, b in zip(curation.kept_only(with_amp),
+                         curation.kept_only(without_amp))
+        if a.driver.uuid == b.driver.uuid
+    )
+    assert any_shifted

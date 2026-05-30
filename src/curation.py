@@ -61,6 +61,89 @@ DEMOTED = "demoted"
 DROPPED = "dropped"
 
 
+# ===========================================================================
+# DYNAMIC KEYWORD AMPLIFICATION — the "stretch goal" from edges.md.
+# ---------------------------------------------------------------------------
+# Whitelist is necessary but blunt: it keeps a credible category but doesn't
+# distinguish a key driver from a tangential one. The amplification table
+# scans driver names for high-conviction tokens and multiplies the
+# whitelist-adjusted importance by a per-token factor (>1.0 = boost).
+#
+# The table below targets the exact signals the team brief calls out as
+# directly influencing European gas: Brent / LNG / carbon / storage / VIX-
+# class volatility / PMI / EUR-USD / heating demand / geopolitical risk.
+#
+# When multiple tokens match the same driver, the strongest factor wins
+# (we don't compound — that would let two weak tokens silently dominate).
+# ===========================================================================
+
+AMPLIFY_TOKENS_TTF: dict[str, float] = {
+    # Direct gas-market signals (Tier 1 — strongest boost)
+    "brent":         1.50,   # oil benchmark; tight gas-oil substitution coupling
+    "lng":           1.50,   # liquefied natural gas import flows
+    "carbon":        1.45,   # EU ETS allowance price
+    "natural gas":   1.45,
+    # Geopolitical / risk (Tier 2)
+    "vix":           1.40,
+    "volatility":    1.40,
+    "geopolitical":  1.35,
+    "global risk":   1.35,
+    # Macro indicators (Tier 3)
+    "exchange rate": 1.30,
+    "eur/usd":       1.30,
+    "usd/eur":       1.30,
+    "pmi":           1.25,
+    "inflation":     1.20,
+    "heating":       1.25,   # heating demand
+    "storage":       1.30,   # European gas storage levels
+    # Broad-category boosters (Tier 4 — mild)
+    "energy":        1.15,
+    "commodities":   1.10,
+}
+
+
+# Human-readable economic rationale for each amplification token.
+# Surfaced in the cockpit so a user understands WHY a signal got boosted.
+AMPLIFY_RATIONALE: dict[str, str] = {
+    "brent":         "Oil benchmark — gas-oil price coupling via substitution",
+    "lng":           "Liquefied natural gas import flows shape European supply",
+    "carbon":        "EU ETS allowance price tracks gas-vs-coal competitiveness",
+    "natural gas":   "Direct gas-market signal",
+    "vix":           "Volatility regime spikes drive risk-off / energy premium",
+    "volatility":    "Volatility regime shifts move energy prices",
+    "geopolitical":  "Direct geopolitical risk premium on European supply",
+    "global risk":   "Geopolitical / macro risk composite",
+    "exchange rate": "EUR weakness raises EUR-denominated gas cost",
+    "eur/usd":       "EUR-USD cross is the gas-price currency channel",
+    "usd/eur":       "EUR-USD cross is the gas-price currency channel",
+    "pmi":           "Manufacturing PMI proxies industrial gas demand",
+    "inflation":     "Inflation regimes drive cost-of-carry expectations",
+    "heating":       "Heating demand drives seasonal gas draw",
+    "storage":       "European gas storage is a leading supply indicator",
+    "energy":        "Broad-category energy market signal",
+    "commodities":   "Broad-category commodity market signal",
+}
+
+
+def amplification_factor(
+    driver_name: str,
+    table: dict[str, float] = AMPLIFY_TOKENS_TTF,
+) -> tuple[float, tuple[str, ...]]:
+    """Return (max factor across matched tokens, tuple of matched tokens).
+
+    Match is case-insensitive substring. No-match returns (1.0, ()).
+    """
+    n = driver_name.lower()
+    matched: list[str] = []
+    best = 1.0
+    for token, factor in table.items():
+        if token in n:
+            matched.append(token)
+            if factor > best:
+                best = factor
+    return best, tuple(matched)
+
+
 @dataclass(frozen=True)
 class CurationDecision:
     driver: Driver
@@ -68,6 +151,8 @@ class CurationDecision:
     reason: str
     adjusted_importance_by_h: dict[int, float]
     adjusted_importance_overall: float
+    amplification_factor: float = 1.0           # 1.0 = no amplification
+    matched_tokens: tuple[str, ...] = ()        # which keywords fired the boost
 
     @property
     def name(self) -> str: return self.driver.name
@@ -78,6 +163,10 @@ class CurationDecision:
     @property
     def scope(self) -> str: return self.driver.scope
 
+    @property
+    def amplified(self) -> bool:
+        return self.amplification_factor > 1.0
+
 
 def curate(
     drivers: Iterable[Driver],
@@ -85,9 +174,20 @@ def curate(
     whitelist: Iterable[str] = DEFAULT_WHITELIST,
     plausible_scopes: Iterable[str] = PLAUSIBLE_SCOPES_TTF,
     demote_factor: float = DEMOTE_FACTOR_DEFAULT,
+    amplify_table: dict[str, float] | None = AMPLIFY_TOKENS_TTF,
 ) -> list[CurationDecision]:
-    """Apply whitelist + scope plausibility, return decisions sorted by
-    adjusted_importance_overall desc.
+    """Apply whitelist + scope plausibility + dynamic keyword amplification.
+
+    Returns decisions sorted by `adjusted_importance_overall` desc.
+
+    Pipeline (per driver):
+      1) Category whitelist     -> DROPPED if not in whitelist
+      2) Scope plausibility     -> DEMOTED (x demote_factor) if scope is
+                                   outside the per-ticker plausible set
+      3) Keyword amplification  -> multiply by max matching token's factor
+                                   (1.0..1.5) from amplify_table
+
+    Pass `amplify_table=None` to disable amplification (A/B comparison).
     """
     wl = frozenset(whitelist)
     sc = frozenset(plausible_scopes)
@@ -105,18 +205,31 @@ def curate(
             )
             continue
         if d.scope and d.scope not in sc:
-            factor = demote_factor
+            scope_factor = demote_factor
             decision = DEMOTED
             reason = (
                 f"scope '{d.scope}' implausible for active ticker — "
-                f"demoted by x{factor}"
+                f"demoted by x{scope_factor}"
             )
         else:
-            factor = 1.0
+            scope_factor = 1.0
             decision = KEPT
             reason = "in whitelist + plausible scope"
-        adj_h = {h: d.importance_by_h.get(h, 0.0) * factor for h in HORIZONS}
-        adj_overall = d.importance_overall * factor
+
+        # Dynamic amplification on the driver name (Tier-1..4 keywords).
+        if amplify_table:
+            amp, matched = amplification_factor(d.name, amplify_table)
+        else:
+            amp, matched = 1.0, ()
+        if amp > 1.0:
+            reason += f"; AMPLIFIED x{amp} (matched: {', '.join(matched)})"
+
+        total_factor = scope_factor * amp
+        adj_h = {
+            h: d.importance_by_h.get(h, 0.0) * total_factor
+            for h in HORIZONS
+        }
+        adj_overall = d.importance_overall * total_factor
         out.append(
             CurationDecision(
                 driver=d,
@@ -124,6 +237,8 @@ def curate(
                 reason=reason,
                 adjusted_importance_by_h=adj_h,
                 adjusted_importance_overall=adj_overall,
+                amplification_factor=amp,
+                matched_tokens=matched,
             )
         )
     out.sort(key=lambda x: x.adjusted_importance_overall, reverse=True)
@@ -160,13 +275,18 @@ def kept_vs_dropped_report(
     lines.append(f"dropped           : {len(drp)}")
     lines.append("")
     # Top KEPT
-    lines.append(f"-- top {min(top_n, len(kept))} KEPT (whitelist + plausible scope) --")
-    lines.append(f"{'#':>3}  {'adj_imp':>8}  {'raw_imp':>8}  {'dir':>4}  {'corr':>7}  category            name")
+    lines.append(f"-- top {min(top_n, len(kept))} KEPT (whitelist + plausible scope + amplification) --")
+    lines.append(f"{'#':>3}  {'adj_imp':>8}  {'raw_imp':>8}  {'amp':>5}  {'dir':>4}  {'corr':>7}  category            name")
     for i, c in enumerate(kept[:top_n], start=1):
         corr = f"{c.driver.correlation:+.3f}" if c.driver.correlation is not None else "   ?   "
+        amp_str = (
+            f"x{c.amplification_factor:.2f}"
+            if c.amplified else "  -- "
+        )
         lines.append(
             f"{i:>3}  {c.adjusted_importance_overall:>8.2f}  "
             f"{c.driver.importance_overall:>8.2f}  "
+            f"{amp_str:>5}  "
             f"{c.driver.direction_sign():>4}  {corr:>7}  "
             f"{c.driver.category:<18}  {c.driver.name}"
         )

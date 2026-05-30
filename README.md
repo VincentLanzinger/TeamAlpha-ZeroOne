@@ -15,10 +15,12 @@ never makes a different recommendation than the engine.
 
 ## Try it / clone and run
 
-**Hosted (Streamlit Community Cloud):**
-[Open the cockpit](https://share.streamlit.io/deploy?repository=SwapnilKhandoker101/TeamAlpha-ZeroOne&branch=VTest&mainModule=app.py)
-— first-time visitors will see the "Deploy" page; the team owner can complete the
-one-click deploy from there. Live result is published to a `*.streamlit.app` URL.
+**🟢 Hosted demo (Streamlit Community Cloud):**
+**https://teamalpha-zeroone-5jl9ffvnxx2jhnda5duc5t.streamlit.app/**
+
+Works out of the box off the committed forecast cache. Click *⚡ Run scenario* in the
+sidebar to see the recommendation flip under a simulated Hormuz shock; click *📝 Generate
+memo* for a live LLM-narrated board memo.
 
 **Locally:**
 ```bash
