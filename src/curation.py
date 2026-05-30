@@ -104,15 +104,19 @@ AMPLIFY_TOKENS_TTF: dict[str, float] = {
 
 # Human-readable economic rationale for each amplification token.
 # Surfaced in the cockpit so a user understands WHY a signal got boosted.
+# Includes all tokens used across countries.py per-country tables.
 AMPLIFY_RATIONALE: dict[str, str] = {
+    # --- gas-market primary ----------------------------------------------
     "brent":         "Oil benchmark — gas-oil price coupling via substitution",
     "lng":           "Liquefied natural gas import flows shape European supply",
     "carbon":        "EU ETS allowance price tracks gas-vs-coal competitiveness",
     "natural gas":   "Direct gas-market signal",
+    # --- risk / volatility -----------------------------------------------
     "vix":           "Volatility regime spikes drive risk-off / energy premium",
     "volatility":    "Volatility regime shifts move energy prices",
     "geopolitical":  "Direct geopolitical risk premium on European supply",
     "global risk":   "Geopolitical / macro risk composite",
+    # --- macro / currency / demand ---------------------------------------
     "exchange rate": "EUR weakness raises EUR-denominated gas cost",
     "eur/usd":       "EUR-USD cross is the gas-price currency channel",
     "usd/eur":       "EUR-USD cross is the gas-price currency channel",
@@ -120,6 +124,27 @@ AMPLIFY_RATIONALE: dict[str, str] = {
     "inflation":     "Inflation regimes drive cost-of-carry expectations",
     "heating":       "Heating demand drives seasonal gas draw",
     "storage":       "European gas storage is a leading supply indicator",
+    # --- industry & sector demand ----------------------------------------
+    "industrial":    "Industrial demand intensity drives baseload gas draw",
+    "manufacturing": "Manufacturing activity proxies industrial gas demand",
+    "chemical":      "Chemicals industry is a major gas user (feedstock + heat)",
+    "electricity":   "Electricity-gas spread couples power and gas prices",
+    "power":         "Power-sector gas demand (gas-fired generation)",
+    "nuclear":       "Nuclear availability is the gas-substitution lever",
+    "renewable":     "Renewables share inversely drives gas balancing demand",
+    # --- supply geography ------------------------------------------------
+    "norwegian":     "Norwegian pipeline gas — largest European post-Russia supplier",
+    "russian":       "Russian pipeline gas — legacy supply / geopolitical signal",
+    "algeria":       "Algerian pipeline gas — Italy / Spain / France via Maghreb",
+    "maghreb":       "Maghreb-Europe pipeline corridor (Algeria → Spain)",
+    "mediterranean": "Mediterranean supply security (TransMed / GreenStream)",
+    "north sea":     "North Sea production — UK / Norway / Netherlands supply",
+    "baltic":        "Baltic Pipe — Norwegian gas to Poland via Denmark",
+    # --- hubs / terminals ------------------------------------------------
+    "zeebrugge":     "Belgian LNG terminal + transit hub to Germany / UK",
+    "rotterdam":     "Dutch trading hub + Gate LNG terminal",
+    "nbp":           "UK National Balancing Point — tracks TTF via Interconnector",
+    # --- broad-category catch-alls ---------------------------------------
     "energy":        "Broad-category energy market signal",
     "commodities":   "Broad-category commodity market signal",
 }
