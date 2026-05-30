@@ -609,7 +609,10 @@ if show_advanced:
         for c in [x for x in bundle.curated if x.decision != curation.DROPPED][:12]:
             kept_rows.append({
                 "name": c.driver.name,
-                "importance": f"{c.adjusted_importance_overall:.1f}",
+                "imp (adj)": f"{c.adjusted_importance_overall:.1f}",
+                "amp": (f"x{c.amplification_factor:.2f}"
+                        if c.amplified else "—"),
+                "matched": ", ".join(c.matched_tokens) if c.matched_tokens else "—",
                 "direction": ("↑" if c.driver.direction_overall > 0.01
                               else ("↓" if c.driver.direction_overall < -0.01 else "→")),
                 "corr": (f"{c.driver.correlation:+.2f}"
@@ -620,9 +623,11 @@ if show_advanced:
         n_kept = sum(1 for c in bundle.curated if c.decision == curation.KEPT)
         n_dem = sum(1 for c in bundle.curated if c.decision == curation.DEMOTED)
         n_drp = sum(1 for c in bundle.curated if c.decision == curation.DROPPED)
+        n_amp = sum(1 for c in bundle.curated if c.amplified and c.decision != curation.DROPPED)
         st.caption(
-            f"Curation: **{n_kept}** kept, **{n_dem}** demoted (whitelist but "
-            f"implausible scope), **{n_drp}** dropped (off-whitelist categories)."
+            f"Curation: **{n_kept}** kept, **{n_dem}** demoted, "
+            f"**{n_drp}** dropped, **{n_amp}** amplified by keyword match. "
+            f"`amp` shows the multiplier, `matched` shows which token(s) fired the boost."
         )
 
     with a2:
