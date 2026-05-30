@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 # === ONE-LINE TICKER SWITCH ===
-TICKER: str = "EUA"
+TICKER: str = "TTF"
 # ==============================
 
 SEED: int = 42
@@ -56,6 +56,10 @@ class TickerSpec:
     keywords: tuple[str, ...] = field(default_factory=tuple)
     unit: str = ""
     display_name: str = ""
+    # Per-ticker overrides for the forecast request.
+    recency_factor_override: float | None = None
+    forecast_regions: tuple[int, ...] = ()
+    forecast_categories: tuple[int, ...] = ()
 
 
 # Registry — add more tickers here; flipping TICKER above switches the whole pipeline.
@@ -84,14 +88,21 @@ TICKER_REGISTRY: dict[str, TickerSpec] = {
         metadata_description=(
             "Monthly EUR-per-MWh front-month settlement for Dutch TTF natural gas. "
             "Primary European gas benchmark and a key cost input for power and "
-            "industrial users; here used as a hedging decision target."
+            "industrial users; here used as a hedging decision target. Drivers "
+            "include LNG flows and inventory, gas storage levels, Brent oil, "
+            "European electricity prices, and heating demand."
         ),
         keywords=(
-            "TTF", "natural gas", "European gas", "front-month", "energy",
-            "power price", "industrial input cost",
+            "TTF", "LNG", "gas storage", "Brent", "electricity",
+            "heating demand", "European energy",
         ),
         unit="EUR / MWh",
         display_name="Dutch TTF Natural Gas",
+        # Hour-one gate uses recency_factor 0.7 (TTF moves fast; recent regime matters).
+        recency_factor_override=0.7,
+        # Filter scope chosen for the gate: regions=[3] (Europe), categories=[25 Energy, 46 Commodities].
+        forecast_regions=(3,),
+        forecast_categories=(25, 46),
     ),
     "ALUMINUM": TickerSpec(
         symbol="ALUMINUM",
