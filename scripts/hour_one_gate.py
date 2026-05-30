@@ -24,157 +24,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src import config, data
-from src import sybilion_client as sc  # noqa: E402
-
-
-# -- parsers / pretty printers ----------------------------------------------
-
-def parse_forecast_bands(forecast_json: dict[str, Any]) -> list[dict[str, float]]:
-    """Return per-horizon-month rows with q0.10 / q0.50 / q0.90 (and point if available)."""
-    series = (
-        forecast_json.get("data", {}).get("forecast_series")
-        or forecast_json.get("forecast_series")
-        or {}
-    )
-    rows: list[dict[str, float]] = []
-    for date, row in sorted(series.items()):
-        q = row.get("quantile_forecast", {})
-        point = row.get("forecast")
-        # API publishes 19 levels 0.05..0.95; we focus on 0.10/0.50/0.90.
-        rows.append(
-            {
-                "date": date,
-                "q10": float(q.get("0.1") or q.get("0.10") or float("nan")),
-                "q50": float(q.get("0.5") or q.get("0.50") or float("nan")),
-                "q90": float(q.get("0.9") or q.get("0.90") or float("nan")),
-                "point": float(point) if point is not None else float("nan"),
-            }
-        )
-    return rows
-
-
-HORIZON_KEYS = ("horizon_1", "horizon_2", "horizon_3", "horizon_4", "horizon_5", "horizon_6")
-
-
-def _sum_inner(d: Any) -> float:
-    """An importance/direction horizon entry is {<lag-key str>: float, ...}.
-    Aggregate by SUM across lag keys (captures the total contribution of the
-    driver at that horizon, regardless of how it splits across lags)."""
-    if isinstance(d, dict):
-        return float(sum(float(v) for v in d.values()))
-    return float(d) if d is not None else 0.0
-
-
-def _imp(driver: dict[str, Any]) -> float:
-    """Driver-level importance = MEAN over horizons of (SUM over inner lag keys).
-
-    The API artifact has no `importance.overall.mean`; we compute it.
-    """
-    imp = driver.get("importance") or {}
-    if not isinstance(imp, dict):
-        return float(imp or 0.0)
-    # Some drivers have `overall.mean` injected; prefer that when present.
-    overall = imp.get("overall")
-    if isinstance(overall, dict) and "mean" in overall:
-        return float(overall["mean"])
-    per_h = [_sum_inner(imp.get(h)) for h in HORIZON_KEYS if h in imp]
-    return float(sum(per_h) / len(per_h)) if per_h else 0.0
-
-
-def _dir(driver: dict[str, Any]) -> float:
-    """Driver-level direction = signed mean (positive = up, negative = down).
-
-    Prefer `direction.overall.mean`; otherwise mean over horizons of summed
-    inner values.
-    """
-    direction = driver.get("direction") or {}
-    if not isinstance(direction, dict):
-        try:
-            return float(direction)
-        except (TypeError, ValueError):
-            return 0.0
-    overall = direction.get("overall")
-    if isinstance(overall, dict) and "mean" in overall:
-        return float(overall["mean"])
-    # horizon_0 captures the "now" direction for some drivers.
-    if "horizon_0" in direction:
-        return float(_sum_inner(direction["horizon_0"]))
-    per_h = [_sum_inner(direction.get(h)) for h in HORIZON_KEYS if h in direction]
-    return float(sum(per_h) / len(per_h)) if per_h else 0.0
-
-
-def _corr(driver: dict[str, Any]) -> float | None:
-    corr = driver.get("pearson_correlation") or driver.get("correlation") or {}
-    if isinstance(corr, dict):
-        ov = corr.get("overall")
-        if isinstance(ov, dict) and "mean" in ov:
-            return float(ov["mean"])
-        if "mean" in corr:
-            return float(corr["mean"])
-        return None
-    try:
-        return float(corr)
-    except (TypeError, ValueError):
-        return None
-
-
-def _name(driver: dict[str, Any]) -> str:
-    return str(driver.get("driver_name") or driver.get("name") or driver.get("hash_id") or "?")
-
-
-def _category(driver: dict[str, Any]) -> str:
-    """Drivers carry no explicit category; derive from the 'Cat - Scope' name prefix.
-
-    Examples: 'Commodities - World' -> 'Commodities'; 'Population - Nicaragua' -> 'Population'.
-    """
-    name = _name(driver)
-    if " - " in name:
-        return name.split(" - ", 1)[0].strip()
-    return name
-
-
-def parse_drivers(external_signals: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return a list of driver rows ranked by computed importance desc.
-
-    Accepts the actual artifact shape: `data` is a dict keyed by UUID, each value
-    is `{driver_name, importance: {horizon_1..6: {lag: value}}, direction: {...},
-    pearson_correlation: {...}}`. Falls back to legacy `drivers` list shape if seen.
-    """
-    raw = external_signals.get("data") or external_signals.get("drivers") or []
-    if isinstance(raw, dict):
-        items = list(raw.items())
-    elif isinstance(raw, list):
-        items = [(d.get("hash_id", ""), d) for d in raw]
-    else:
-        items = []
-    rows = [
-        {
-            "uuid": uid,
-            "name": _name(d),
-            "category": _category(d),
-            "importance": _imp(d),
-            "direction": _dir(d),
-            "correlation": _corr(d),
-        }
-        for uid, d in items
-    ]
-    rows.sort(key=lambda r: r["importance"], reverse=True)
-    return rows
-
-
-def _dir_arrow(value: float) -> str:
-    if value > 0.01:
-        return "+"
-    if value < -0.01:
-        return "-"
-    return "0"
+from src import config, data, curation
+from src import sybilion_client as sc
+from src.signals import Driver, parse_drivers, parse_forecast_bands  # noqa: F401
 
 
 # -- verdict ----------------------------------------------------------------
 
 def verdict(
-    drivers: list[dict[str, Any]],
+    drivers: list[Driver],
     *,
     importance_threshold: float = 5.0,
     min_credible: int = 5,
@@ -182,16 +40,16 @@ def verdict(
 ) -> tuple[str, str]:
     """Return ('KEEP'|'SWITCH', reason).
 
-    Importance scale (observed): per-driver values are 0 to ~70. Many drivers are
-    flat-zero (no contribution); credible TTF drivers like 'Commodities - World'
-    score in the 30–70 range. Thresholds calibrated to that scale.
+    Importance scale (observed): per-driver values 0..~100. Many drivers are
+    flat-zero; credible TTF drivers like 'Commodities - World' score 30–98.
+    Threshold calibrated against that scale.
     """
     if not drivers:
         return "SWITCH", "No drivers returned at all."
-    credible = [d for d in drivers if d["importance"] >= importance_threshold]
+    credible = [d for d in drivers if d.importance_overall >= importance_threshold]
     n_cred = len(credible)
-    top_imp = drivers[0]["importance"]
-    n_distinct_cats = len({d["category"] for d in credible if d["category"] != "?"})
+    top_imp = drivers[0].importance_overall
+    n_distinct_cats = len({d.category for d in credible if d.category})
     if n_cred >= min_credible and top_imp >= min_top_importance:
         return (
             "KEEP",
@@ -266,33 +124,48 @@ def run(force: bool = False, top_n: int = 15) -> int:
     signals = result.get("external_signals.json", {})
 
     # --- bands ----
-    rows = parse_forecast_bands(forecast)
+    bands = parse_forecast_bands(forecast)
     print("--- forecast bands (per horizon month) ---")
     print(f"{'date':<12}  {'q10':>8}  {'q50':>8}  {'q90':>8}  {'width%':>8}")
     spot = data.current_spot(df)
     print(f"{'(spot)':<12}  {' '*8}  {spot:>8.2f}")
-    for r in rows:
-        width_pct = (r["q90"] - r["q10"]) / r["q50"] * 100 if r["q50"] else float("nan")
+    for b in bands:
         print(
-            f"{r['date']:<12}  {r['q10']:>8.2f}  {r['q50']:>8.2f}  "
-            f"{r['q90']:>8.2f}  {width_pct:>7.1f}%"
+            f"{b.date:<12}  {b.q10:>8.2f}  {b.q50:>8.2f}  "
+            f"{b.q90:>8.2f}  {b.width_pct * 100:>7.1f}%"
         )
     print()
 
-    # --- drivers ----
+    # --- raw drivers ----
     drivers = parse_drivers(signals)
-    n_nonzero = sum(1 for d in drivers if d["importance"] > 0)
+    n_nonzero = sum(1 for d in drivers if d.importance_overall > 0)
     print(
-        f"--- top {min(top_n, len(drivers))} of {len(drivers)} drivers "
+        f"--- top {min(top_n, len(drivers))} of {len(drivers)} raw drivers "
         f"({n_nonzero} with importance > 0) ---"
     )
     print(f"{'#':>3}  {'imp':>8}  {'dir':>4}  {'dir_val':>8}  {'corr':>7}  {'category':<18}  name")
     for i, d in enumerate(drivers[:top_n], start=1):
-        corr = f"{d['correlation']:+.3f}" if d["correlation"] is not None else "   ?   "
+        corr = f"{d.correlation:+.3f}" if d.correlation is not None else "   ?   "
         print(
-            f"{i:>3}  {d['importance']:>8.3f}  "
-            f"{_dir_arrow(d['direction']):>4}  {d['direction']:>+8.3f}  {corr:>7}  "
-            f"{d['category']:<18}  {d['name']}"
+            f"{i:>3}  {d.importance_overall:>8.3f}  "
+            f"{d.direction_sign():>4}  {d.direction_overall:>+8.3f}  {corr:>7}  "
+            f"{d.category:<18}  {d.name}"
+        )
+    print()
+
+    # --- curated drivers (Phase 3) ----
+    decisions = curation.curate(drivers)
+    kept = curation.kept_only(decisions)
+    print(
+        f"--- top {min(top_n, len(kept))} of {len(kept)} CURATED drivers "
+        f"(whitelist + scope plausibility) ---"
+    )
+    print(f"{'#':>3}  {'adj_imp':>8}  {'raw_imp':>8}  {'tag':>8}  {'category':<18}  name")
+    for i, c in enumerate(kept[:top_n], start=1):
+        print(
+            f"{i:>3}  {c.adjusted_importance_overall:>8.2f}  "
+            f"{c.driver.importance_overall:>8.2f}  {c.decision:>8}  "
+            f"{c.driver.category:<18}  {c.driver.name}"
         )
     print()
 
