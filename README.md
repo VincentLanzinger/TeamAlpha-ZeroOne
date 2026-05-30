@@ -1,6 +1,6 @@
 # Hedge Decision Agent
 
-[![tests](https://github.com/SwapnilKhandoker101/TeamAlpha-ZeroOne/actions/workflows/tests.yml/badge.svg?branch=VTest)](https://github.com/SwapnilKhandoker101/TeamAlpha-ZeroOne/actions/workflows/tests.yml)
+[![tests](https://github.com/VincentLanzinger/TeamAlpha-ZeroOne/actions/workflows/tests.yml/badge.svg)](https://github.com/VincentLanzinger/TeamAlpha-ZeroOne/actions/workflows/tests.yml)
 [![python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -24,7 +24,7 @@ memo* for a live LLM-narrated board memo.
 
 **Locally:**
 ```bash
-git clone --branch VTest https://github.com/SwapnilKhandoker101/TeamAlpha-ZeroOne
+git clone https://github.com/VincentLanzinger/TeamAlpha-ZeroOne
 cd TeamAlpha-ZeroOne
 python -m venv .venv
 . .venv/bin/activate          # Windows: .\.venv\Scripts\Activate.ps1
