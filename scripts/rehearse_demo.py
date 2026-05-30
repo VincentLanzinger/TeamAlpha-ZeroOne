@@ -83,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
                 if cands else (_ for _ in ()).throw(RuntimeError("no cache")))
     if cdir is None:
         return 2
-    print(f"        cache = {cdir.name[:24]}…")
+    print(f"        cache = {cdir.name[:24]}...")
 
     # --- Step 3: data ---------------------------------------------------------
     print("\nData + decision")
